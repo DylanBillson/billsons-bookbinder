@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Virtual environment
+.venv/
+
+# Application output
+output/
+
+# Build and installer output
+build/
+dist/
+installer/output/
+*.spec
+
+# Editor and operating system
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# Temporary files
+*.log
+*.tmp
