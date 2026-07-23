@@ -11,6 +11,13 @@ from app.models.book_project import (
     PaperSize,
     PrintSettings,
 )
+from app.models.imposition import (
+    BookImposition,
+    ImposedSheet,
+    ImposedSide,
+    ImposedSignature,
+    SheetSide,
+)
 from app.models.signature_plan import (
     PlannedSignature,
     SignaturePlan,
@@ -18,14 +25,19 @@ from app.models.signature_plan import (
 
 __all__ = [
     "BlankPages",
+    "BookImposition",
     "BookInput",
     "BookProject",
     "DuplexMode",
+    "ImposedSheet",
+    "ImposedSide",
+    "ImposedSignature",
     "InputDocument",
     "MarginSettings",
     "PageFittingMode",
     "PaperSize",
     "PlannedSignature",
     "PrintSettings",
+    "SheetSide",
     "SignaturePlan",
 ]
