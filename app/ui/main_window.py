@@ -14,15 +14,23 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSplitter,
     QStatusBar,
     QVBoxLayout,
     QWidget,
 )
 
-from app.core import SignaturePlanError, SignaturePlanner
+from app.core import (
+    BookletImposer,
+    BookletImpositionError,
+    SignaturePlanError,
+    SignaturePlanner,
+)
 from app.models import (
     BlankPages,
+    BookImposition,
     BookProject,
+    ImposedSignature,
     InputDocument,
 )
 from app.services import PdfDocumentError, PdfDocumentService
@@ -36,10 +44,11 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self.project = project
+        self.current_imposition: BookImposition | None = None
 
         self.setWindowTitle(APP_NAME)
-        self.setMinimumSize(1200, 750)
-        self.resize(1450, 850)
+        self.setMinimumSize(1250, 780)
+        self.resize(1550, 900)
 
         self._build_menu()
         self._build_interface()
@@ -77,7 +86,7 @@ class MainWindow(QMainWindow):
         planning_panel = self._create_planning_panel()
 
         main_layout.addWidget(controls_panel, stretch=2)
-        main_layout.addWidget(planning_panel, stretch=3)
+        main_layout.addWidget(planning_panel, stretch=4)
 
         self.setCentralWidget(central_widget)
 
@@ -197,7 +206,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        heading = QLabel("Signature Plan")
+        heading = QLabel("Signature Plan and Imposition Preview")
         heading_font = heading.font()
         heading_font.setPointSize(14)
         heading_font.setBold(True)
@@ -216,16 +225,71 @@ class MainWindow(QMainWindow):
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
 
-        self.signature_list = QListWidget()
-        self.signature_list.setAlternatingRowColors(True)
-        self.signature_list.setMinimumSize(550, 450)
+        preview_splitter = QSplitter(Qt.Orientation.Horizontal)
+        preview_splitter.setChildrenCollapsible(False)
+
+        signature_group = self._create_signature_list_group()
+        sheet_preview_group = self._create_sheet_preview_group()
+
+        preview_splitter.addWidget(signature_group)
+        preview_splitter.addWidget(sheet_preview_group)
+        preview_splitter.setStretchFactor(0, 2)
+        preview_splitter.setStretchFactor(1, 3)
+        preview_splitter.setSizes([420, 620])
 
         layout.addWidget(heading)
         layout.addWidget(self.validation_label)
         layout.addWidget(self.plan_summary_label)
-        layout.addWidget(self.signature_list, stretch=1)
+        layout.addWidget(preview_splitter, stretch=1)
 
         return panel
+
+    def _create_signature_list_group(self) -> QGroupBox:
+        group = QGroupBox("Signatures")
+        layout = QVBoxLayout(group)
+        layout.setSpacing(8)
+
+        help_label = QLabel("Select a signature to preview its physical sheets.")
+        help_label.setWordWrap(True)
+
+        self.signature_list = QListWidget()
+        self.signature_list.setAlternatingRowColors(True)
+        self.signature_list.setMinimumWidth(340)
+        self.signature_list.currentRowChanged.connect(self._selected_signature_changed)
+
+        layout.addWidget(help_label)
+        layout.addWidget(self.signature_list)
+
+        return group
+
+    def _create_sheet_preview_group(self) -> QGroupBox:
+        group = QGroupBox("Selected Signature")
+        layout = QVBoxLayout(group)
+        layout.setSpacing(8)
+
+        self.selected_signature_summary_label = QLabel(
+            "Select a valid signature to preview its sheets."
+        )
+        self.selected_signature_summary_label.setWordWrap(True)
+        self.selected_signature_summary_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+
+        explanation_label = QLabel(
+            "Each row represents one physical sheet. Page numbers are "
+            "shown left-to-right as they appear on that printed side."
+        )
+        explanation_label.setWordWrap(True)
+
+        self.sheet_preview_list = QListWidget()
+        self.sheet_preview_list.setAlternatingRowColors(True)
+        self.sheet_preview_list.setMinimumWidth(500)
+
+        layout.addWidget(self.selected_signature_summary_label)
+        layout.addWidget(explanation_label)
+        layout.addWidget(self.sheet_preview_list)
+
+        return group
 
     def _build_status_bar(self) -> None:
         status_bar = QStatusBar(self)
@@ -400,6 +464,18 @@ class MainWindow(QMainWindow):
         self._refresh_summary()
         self._refresh_signature_plan()
 
+    def _selected_signature_changed(self, selected_index: int) -> None:
+        if (
+            self.current_imposition is None
+            or selected_index < 0
+            or selected_index >= len(self.current_imposition.signatures)
+        ):
+            self._clear_sheet_preview()
+            return
+
+        signature = self.current_imposition.signatures[selected_index]
+        self._show_signature_preview(signature)
+
     def _refresh_interface(self) -> None:
         self._refresh_input_list()
         self._refresh_summary()
@@ -441,7 +517,15 @@ class MainWindow(QMainWindow):
         )
 
     def _refresh_signature_plan(self) -> None:
+        selected_signature_index = self.signature_list.currentRow()
+
+        self.signature_list.blockSignals(True)
         self.signature_list.clear()
+        self.signature_list.blockSignals(False)
+
+        self.current_imposition = None
+        self._clear_sheet_preview()
+
         sequence_value = self.signature_sequence_edit.text()
 
         if not self.project.documents:
@@ -472,8 +556,21 @@ class MainWindow(QMainWindow):
             )
             return
 
+        try:
+            imposition = BookletImposer.create(plan)
+        except BookletImpositionError as exc:
+            self._show_warning_validation(
+                f"The signature plan is valid, but imposition failed: {exc}"
+            )
+            self.plan_summary_label.setText(
+                f"Input: {plan.total_page_count} pages · {plan.total_sheet_count} sheets"
+            )
+            return
+
+        self.current_imposition = imposition
+
         self._show_valid_validation(
-            "Signature plan is valid. The plan exactly covers the ordered input pages."
+            "The plan exactly covers the ordered input pages and has been imposed successfully."
         )
 
         self.plan_summary_label.setText(
@@ -483,6 +580,8 @@ class MainWindow(QMainWindow):
             f"PDF pages: {plan.source_pdf_page_count} · "
             f"Blank pages: {plan.blank_page_count}"
         )
+
+        self.signature_list.blockSignals(True)
 
         for signature in plan.signatures:
             sheet_word = "sheet" if signature.sheet_count == 1 else "sheets"
@@ -494,6 +593,50 @@ class MainWindow(QMainWindow):
                 f"Book pages {signature.start_page_index + 1}"
                 f"–{signature.end_page_index + 1}"
             )
+
+        self.signature_list.blockSignals(False)
+
+        if self.signature_list.count() > 0:
+            if selected_signature_index < 0:
+                selected_signature_index = 0
+
+            selected_signature_index = min(
+                selected_signature_index,
+                self.signature_list.count() - 1,
+            )
+
+            self.signature_list.setCurrentRow(selected_signature_index)
+
+    def _show_signature_preview(
+        self,
+        signature: ImposedSignature,
+    ) -> None:
+        self.sheet_preview_list.clear()
+
+        sheet_word = "sheet" if signature.sheet_count == 1 else "sheets"
+
+        self.selected_signature_summary_label.setText(
+            f"<b>Signature {signature.number}</b><br>"
+            f"{signature.sheet_count} {sheet_word} · "
+            f"{signature.page_count} pages · "
+            f"Book pages {signature.start_page_index + 1}"
+            f"–{signature.end_page_index + 1}"
+        )
+
+        for sheet in signature.sheets:
+            self.sheet_preview_list.addItem(
+                f"Sheet {sheet.number}\n"
+                f"Front:  {sheet.front.left_page_number}  |  "
+                f"{sheet.front.right_page_number}\n"
+                f"Back:   {sheet.back.left_page_number}  |  "
+                f"{sheet.back.right_page_number}"
+            )
+
+    def _clear_sheet_preview(self) -> None:
+        self.sheet_preview_list.clear()
+        self.selected_signature_summary_label.setText(
+            "Select a valid signature to preview its sheets."
+        )
 
     def _show_neutral_validation(self, message: str) -> None:
         self.validation_label.setText(f"<b>{message}</b>")

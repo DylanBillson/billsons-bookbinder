@@ -94,12 +94,10 @@ class BookletImposer:
 
         if signature.page_count != signature.sheet_count * 4:
             raise BookletImpositionError(
-                
-                    f"Signature {signature.number} contains "
-                    f"{signature.page_count} pages but "
-                    f"{signature.sheet_count} sheets require "
-                    f"{signature.sheet_count * 4} pages."
-                
+                f"Signature {signature.number} contains "
+                f"{signature.page_count} pages but "
+                f"{signature.sheet_count} sheets require "
+                f"{signature.sheet_count * 4} pages."
             )
 
         if signature.start_page_index < 0:
@@ -109,12 +107,10 @@ class BookletImposer:
 
         if signature.end_page_index != expected_end_index:
             raise BookletImpositionError(
-                
-                    f"Signature {signature.number} has an invalid page range. "
-                    f"Expected its final page index to be "
-                    f"{expected_end_index}, not "
-                    f"{signature.end_page_index}."
-                
+                f"Signature {signature.number} has an invalid page range. "
+                f"Expected its final page index to be "
+                f"{expected_end_index}, not "
+                f"{signature.end_page_index}."
             )
 
     @staticmethod
@@ -143,11 +139,9 @@ class BookletImposer:
             unexpected = sorted(actual_indices - expected_indices)
 
             raise BookletImpositionError(
-                
-                    f"Signature {source.number} produced an invalid "
-                    f"page arrangement. Missing indices: {missing}; "
-                    f"unexpected indices: {unexpected}."
-                
+                f"Signature {source.number} produced an invalid "
+                f"page arrangement. Missing indices: {missing}; "
+                f"unexpected indices: {unexpected}."
             )
 
     @staticmethod
@@ -169,9 +163,7 @@ class BookletImposer:
             unexpected = sorted(actual_indices - expected_indices)
 
             raise BookletImpositionError(
-                
-                    "The complete imposition does not match the book. "
-                    f"Missing indices: {missing}; "
-                    f"unexpected indices: {unexpected}."
-                
+                "The complete imposition does not match the book. "
+                f"Missing indices: {missing}; "
+                f"unexpected indices: {unexpected}."
             )
