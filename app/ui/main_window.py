@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import QTimer, Qt, QUrl
+from PySide6.QtGui import QDesktopServices, QImage, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -47,6 +47,8 @@ from app.models import (
 from app.services import (
     PdfDocumentError,
     PdfDocumentService,
+    PdfPreviewRenderer,
+    PdfPreviewRenderError,
     SignaturePdfExporter,
     SignaturePdfExportError,
 )
@@ -66,6 +68,14 @@ class MainWindow(QMainWindow):
         self.current_imposition: BookImposition | None = None
         self.last_export_directory: Path | None = None
         self.separate_duplex_outputs = False
+        self.current_preview_pixmap: QPixmap | None = None
+        self.current_preview_output_page_index = 0
+        self.preview_zoom_percent = 100
+
+        self.preview_refresh_timer = QTimer(self)
+        self.preview_refresh_timer.setSingleShot(True)
+        self.preview_refresh_timer.setInterval(180)
+        self.preview_refresh_timer.timeout.connect(self._render_current_pdf_preview)
 
         self.setWindowTitle(APP_NAME)
         self.setMinimumSize(1280, 760)
@@ -332,43 +342,93 @@ class MainWindow(QMainWindow):
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
 
-        preview_scroll = QScrollArea()
-        preview_scroll.setWidgetResizable(True)
-        preview_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        preview_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        first_control_row = QHBoxLayout()
+        first_control_row.setSpacing(10)
 
-        preview_container = QWidget()
-        preview_layout = QVBoxLayout(preview_container)
-        preview_layout.setContentsMargins(20, 20, 20, 20)
-        preview_layout.setSpacing(14)
+        signature_label = QLabel("Signature")
 
-        self.pdf_preview_placeholder = QLabel(
-            "<h2>Imposed PDF Preview</h2>"
-            "<p>The rendered page preview will appear here.</p>"
-            "<p>This section will show each generated sheet side using "
-            "the selected paper size, margins, fitting mode and duplex "
-            "settings.</p>"
+        self.preview_signature_combo = QComboBox()
+        self.preview_signature_combo.setMinimumWidth(180)
+        self.preview_signature_combo.currentIndexChanged.connect(self._preview_signature_changed)
+
+        side_label = QLabel("Sheet side")
+
+        self.preview_side_combo = QComboBox()
+        self.preview_side_combo.setMinimumWidth(260)
+        self.preview_side_combo.currentIndexChanged.connect(self._preview_side_changed)
+
+        first_control_row.addWidget(signature_label)
+        first_control_row.addWidget(self.preview_signature_combo)
+        first_control_row.addSpacing(8)
+        first_control_row.addWidget(side_label)
+        first_control_row.addWidget(self.preview_side_combo, stretch=1)
+
+        second_control_row = QHBoxLayout()
+        second_control_row.setSpacing(10)
+
+        self.preview_previous_button = QPushButton("← Previous")
+        self.preview_previous_button.clicked.connect(self._show_previous_preview_side)
+
+        self.preview_next_button = QPushButton("Next →")
+        self.preview_next_button.clicked.connect(self._show_next_preview_side)
+
+        zoom_label = QLabel("Zoom")
+
+        self.preview_zoom_combo = QComboBox()
+
+        for zoom_percent in (50, 75, 100, 125, 150, 200):
+            self.preview_zoom_combo.addItem(
+                f"{zoom_percent}%",
+                zoom_percent,
+            )
+
+        self._select_combo_data(
+            self.preview_zoom_combo,
+            self.preview_zoom_percent,
         )
-        self.pdf_preview_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.pdf_preview_placeholder.setWordWrap(True)
-        self.pdf_preview_placeholder.setMinimumSize(700, 500)
-        self.pdf_preview_placeholder.setStyleSheet(
+        self.preview_zoom_combo.currentIndexChanged.connect(self._preview_zoom_changed)
+
+        self.preview_position_label = QLabel()
+        self.preview_position_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        second_control_row.addWidget(self.preview_previous_button)
+        second_control_row.addWidget(self.preview_next_button)
+        second_control_row.addSpacing(12)
+        second_control_row.addWidget(zoom_label)
+        second_control_row.addWidget(self.preview_zoom_combo)
+        second_control_row.addStretch()
+        second_control_row.addWidget(self.preview_position_label)
+
+        self.pdf_preview_scroll = QScrollArea()
+        self.pdf_preview_scroll.setWidgetResizable(False)
+        self.pdf_preview_scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.pdf_preview_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.pdf_preview_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        self.preview_image_label = QLabel()
+        self.preview_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_image_label.setMinimumSize(700, 500)
+        self.preview_image_label.setText(
+            "<h2>Imposed PDF Preview</h2>"
+            "<p>Select a valid signature plan to render its sheet sides.</p>"
+        )
+        self.preview_image_label.setStyleSheet(
             "QLabel {"
             "background: palette(base);"
-            "border: 1px solid palette(mid);"
-            "border-radius: 6px;"
-            "padding: 30px;"
+            "border: none;"
+            "padding: 0px;"
+            "margin: 0px;"
             "}"
         )
+        self.preview_image_label.setContentsMargins(0, 0, 0, 0)
+        self.preview_image_label.setScaledContents(False)
 
-        preview_layout.addStretch()
-        preview_layout.addWidget(self.pdf_preview_placeholder)
-        preview_layout.addStretch()
-
-        preview_scroll.setWidget(preview_container)
+        self.pdf_preview_scroll.setWidget(self.preview_image_label)
 
         layout.addWidget(self.pdf_preview_summary_label)
-        layout.addWidget(preview_scroll, stretch=1)
+        layout.addLayout(first_control_row)
+        layout.addLayout(second_control_row)
+        layout.addWidget(self.pdf_preview_scroll, stretch=1)
 
         return group
 
@@ -769,7 +829,9 @@ class MainWindow(QMainWindow):
             return
 
         self._refresh_pdf_preview_summary()
+        self._refresh_preview_controls()
         self.page_stack.setCurrentIndex(self.OUTPUT_PAGE_INDEX)
+        self._schedule_pdf_preview_refresh()
         self.statusBar().showMessage("Print setup and export", 2000)
 
     def _select_pdfs(self) -> None:
@@ -1071,6 +1133,7 @@ class MainWindow(QMainWindow):
     def _duplex_output_changed(self, state: int) -> None:
         self.separate_duplex_outputs = state == Qt.CheckState.Checked.value
         self.last_export_directory = None
+        self._refresh_summary()
         self._refresh_pdf_preview_summary()
 
     def _print_settings_changed(self) -> None:
@@ -1078,6 +1141,7 @@ class MainWindow(QMainWindow):
         self.last_export_directory = None
         self._refresh_export_controls()
         self._refresh_pdf_preview_summary()
+        self._schedule_pdf_preview_refresh()
 
     def _apply_print_settings(self) -> None:
         self.project.print_settings.margins.binding_mm = self.binding_margin_spin.value()
@@ -1131,6 +1195,7 @@ class MainWindow(QMainWindow):
         self._refresh_signature_plan()
         self._refresh_export_controls()
         self._refresh_pdf_preview_summary()
+        self._refresh_preview_controls()
         self._update_input_button_states()
 
     def _refresh_input_list(self) -> None:
@@ -1192,6 +1257,7 @@ class MainWindow(QMainWindow):
 
         self.current_imposition = None
         self._clear_sheet_preview()
+        self._clear_pdf_preview()
         self._refresh_navigation_controls()
         self._refresh_export_controls()
 
@@ -1280,6 +1346,8 @@ class MainWindow(QMainWindow):
         self._refresh_navigation_controls()
         self._refresh_export_controls()
         self._refresh_pdf_preview_summary()
+        self._refresh_preview_controls()
+        self._schedule_pdf_preview_refresh()
 
     def _refresh_navigation_controls(self) -> None:
         self.next_button.setEnabled(self.current_imposition is not None)
@@ -1309,6 +1377,7 @@ class MainWindow(QMainWindow):
         paper_size = self._enum_display_name(self.project.print_settings.paper_size)
         fitting_mode = self._enum_display_name(self.project.print_settings.fitting_mode)
         duplex_mode = "Separate A/B files" if self.separate_duplex_outputs else "Ordinary duplex"
+        margins = self.project.print_settings.margins
 
         self.pdf_preview_summary_label.setText(
             f"<b>{self.current_imposition.signature_count} "
@@ -1316,8 +1385,332 @@ class MainWindow(QMainWindow):
             f"{self.current_imposition.total_sheet_count} sheets · "
             f"{paper_size} landscape · "
             f"{fitting_mode} · "
-            f"{duplex_mode}"
+            f"{duplex_mode}<br>"
+            f"Margins: binding {margins.binding_mm:g} mm · "
+            f"outer {margins.outer_mm:g} mm · "
+            f"top {margins.top_mm:g} mm · "
+            f"bottom {margins.bottom_mm:g} mm"
         )
+
+    def _refresh_preview_controls(self) -> None:
+        previous_signature_number = self.preview_signature_combo.currentData()
+
+        self.preview_signature_combo.blockSignals(True)
+        self.preview_signature_combo.clear()
+
+        if self.current_imposition is not None:
+            for signature in self.current_imposition.signatures:
+                self.preview_signature_combo.addItem(
+                    f"Signature {signature.number}",
+                    signature.number,
+                )
+
+        self.preview_signature_combo.blockSignals(False)
+
+        if self.preview_signature_combo.count() == 0:
+            self.preview_side_combo.clear()
+            self._clear_pdf_preview()
+            return
+
+        restored_index = -1
+
+        if previous_signature_number is not None:
+            restored_index = self.preview_signature_combo.findData(previous_signature_number)
+
+        if restored_index < 0:
+            restored_index = 0
+
+        self.preview_signature_combo.setCurrentIndex(restored_index)
+        self._populate_preview_side_combo(preserve_output_index=True)
+
+    def _populate_preview_side_combo(
+        self,
+        *,
+        preserve_output_index: bool,
+    ) -> None:
+        signature = self._selected_preview_signature()
+
+        previous_output_index = (
+            self.current_preview_output_page_index if preserve_output_index else 0
+        )
+
+        self.preview_side_combo.blockSignals(True)
+        self.preview_side_combo.clear()
+
+        if signature is not None:
+            output_page_index = 0
+
+            for sheet in signature.sheets:
+                self.preview_side_combo.addItem(
+                    (
+                        f"Sheet {sheet.number} — Front "
+                        f"({sheet.front.left_page_number} | "
+                        f"{sheet.front.right_page_number})"
+                    ),
+                    output_page_index,
+                )
+                output_page_index += 1
+
+                self.preview_side_combo.addItem(
+                    (
+                        f"Sheet {sheet.number} — Back "
+                        f"({sheet.back.left_page_number} | "
+                        f"{sheet.back.right_page_number})"
+                    ),
+                    output_page_index,
+                )
+                output_page_index += 1
+
+        self.preview_side_combo.blockSignals(False)
+
+        if self.preview_side_combo.count() == 0:
+            self.current_preview_output_page_index = 0
+            self._update_preview_navigation_controls()
+            self._clear_pdf_preview()
+            return
+
+        selected_index = self.preview_side_combo.findData(previous_output_index)
+
+        if selected_index < 0:
+            selected_index = 0
+
+        self.preview_side_combo.setCurrentIndex(selected_index)
+
+        selected_output_index = self.preview_side_combo.currentData()
+
+        if isinstance(selected_output_index, int):
+            self.current_preview_output_page_index = selected_output_index
+        else:
+            self.current_preview_output_page_index = 0
+
+        self._update_preview_navigation_controls()
+
+    def _selected_preview_signature(self) -> ImposedSignature | None:
+        if self.current_imposition is None:
+            return None
+
+        signature_number = self.preview_signature_combo.currentData()
+
+        if not isinstance(signature_number, int):
+            return None
+
+        for signature in self.current_imposition.signatures:
+            if signature.number == signature_number:
+                return signature
+
+        return None
+
+    def _preview_signature_changed(self) -> None:
+        self.current_preview_output_page_index = 0
+        self._populate_preview_side_combo(preserve_output_index=False)
+        self._schedule_pdf_preview_refresh()
+
+    def _preview_side_changed(self) -> None:
+        output_page_index = self.preview_side_combo.currentData()
+
+        if not isinstance(output_page_index, int):
+            return
+
+        self.current_preview_output_page_index = output_page_index
+        self._update_preview_navigation_controls()
+        self._schedule_pdf_preview_refresh()
+
+    def _show_previous_preview_side(self) -> None:
+        current_index = self.preview_side_combo.currentIndex()
+
+        if current_index <= 0:
+            return
+
+        self.preview_side_combo.setCurrentIndex(current_index - 1)
+
+    def _show_next_preview_side(self) -> None:
+        current_index = self.preview_side_combo.currentIndex()
+
+        if current_index < 0:
+            return
+
+        if current_index >= self.preview_side_combo.count() - 1:
+            return
+
+        self.preview_side_combo.setCurrentIndex(current_index + 1)
+
+    def _preview_zoom_changed(self) -> None:
+        zoom_percent = self.preview_zoom_combo.currentData()
+
+        if not isinstance(zoom_percent, int):
+            return
+
+        self.preview_zoom_percent = zoom_percent
+        self._display_current_preview_pixmap()
+
+    def _update_preview_navigation_controls(self) -> None:
+        current_index = self.preview_side_combo.currentIndex()
+        page_count = self.preview_side_combo.count()
+
+        self.preview_previous_button.setEnabled(current_index > 0)
+        self.preview_next_button.setEnabled(current_index >= 0 and current_index < page_count - 1)
+
+        if current_index < 0 or page_count == 0:
+            self.preview_position_label.clear()
+        else:
+            self.preview_position_label.setText(f"Side {current_index + 1} of {page_count}")
+
+    def _schedule_pdf_preview_refresh(self) -> None:
+        if self.page_stack.currentIndex() != self.OUTPUT_PAGE_INDEX:
+            return
+
+        if self.current_imposition is None:
+            self._clear_pdf_preview()
+            return
+
+        self.preview_refresh_timer.start()
+
+    def _render_current_pdf_preview(self) -> None:
+        if self.current_imposition is None:
+            self._clear_pdf_preview()
+            return
+
+        signature = self._selected_preview_signature()
+
+        if signature is None:
+            self._clear_pdf_preview()
+            return
+
+        self._apply_print_settings()
+
+        # Release the fixed pixmap size before displaying status text.
+        self.preview_image_label.setMinimumSize(700, 500)
+        self.preview_image_label.setMaximumSize(
+            16777215,
+            16777215,
+        )
+
+        self.preview_image_label.setPixmap(QPixmap())
+        self.preview_image_label.setText("<h3>Rendering preview…</h3>")
+        self.preview_image_label.adjustSize()
+
+        try:
+            stream = LogicalPageStreamBuilder.create(self.project)
+
+            rendered_page = PdfPreviewRenderer.render_page(
+                self.project,
+                stream,
+                self.current_imposition,
+                signature_number=signature.number,
+                output_page_index=self.current_preview_output_page_index,
+                dpi=110,
+            )
+        except (
+            LogicalPageStreamError,
+            PdfPreviewRenderError,
+        ) as exc:
+            self.current_preview_pixmap = None
+
+            self.preview_image_label.setMinimumSize(700, 500)
+            self.preview_image_label.setMaximumSize(
+                16777215,
+                16777215,
+            )
+            self.preview_image_label.setPixmap(QPixmap())
+            self.preview_image_label.setText(
+                "<h3>Preview could not be rendered</h3>"
+                f"<p>{exc}</p>"
+            )
+            self.preview_image_label.adjustSize()
+
+            self.statusBar().showMessage(
+                "PDF preview failed",
+                5000,
+            )
+            return
+
+        image = QImage.fromData(
+            rendered_page.png_bytes,
+            "PNG",
+        )
+
+        if image.isNull():
+            self.current_preview_pixmap = None
+
+            self.preview_image_label.setMinimumSize(700, 500)
+            self.preview_image_label.setMaximumSize(
+                16777215,
+                16777215,
+            )
+            self.preview_image_label.setPixmap(QPixmap())
+            self.preview_image_label.setText(
+                "<h3>Preview could not be displayed</h3>"
+                "<p>The renderer returned invalid image data.</p>"
+            )
+            self.preview_image_label.adjustSize()
+            return
+
+        self.current_preview_pixmap = QPixmap.fromImage(image)
+        self._display_current_preview_pixmap()
+
+        self.statusBar().showMessage(
+            rendered_page.label,
+            2500,
+        )
+
+    def _display_current_preview_pixmap(self) -> None:
+        if (
+            self.current_preview_pixmap is None
+            or self.current_preview_pixmap.isNull()
+        ):
+            return
+
+        scale_factor = self.preview_zoom_percent / 100.0
+
+        scaled_width = max(
+            1,
+            round(self.current_preview_pixmap.width() * scale_factor),
+        )
+        scaled_height = max(
+            1,
+            round(self.current_preview_pixmap.height() * scale_factor),
+        )
+
+        scaled_pixmap = self.current_preview_pixmap.scaled(
+            scaled_width,
+            scaled_height,
+            Qt.AspectRatioMode.IgnoreAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+
+        self.preview_image_label.clear()
+        self.preview_image_label.setContentsMargins(0, 0, 0, 0)
+        self.preview_image_label.setPixmap(scaled_pixmap)
+        self.preview_image_label.setFixedSize(scaled_pixmap.size())
+
+        self.preview_image_label.updateGeometry()
+        self.pdf_preview_scroll.updateGeometry()
+        self.pdf_preview_scroll.viewport().update()
+
+    def _clear_pdf_preview(self) -> None:
+        self.preview_refresh_timer.stop()
+        self.current_preview_pixmap = None
+
+        self.preview_image_label.setPixmap(QPixmap())
+
+        # Release the fixed pixmap dimensions.
+        self.preview_image_label.setMinimumSize(700, 500)
+        self.preview_image_label.setMaximumSize(
+            16777215,
+            16777215,
+        )
+
+        self.preview_image_label.setText(
+            "<h2>Imposed PDF Preview</h2>"
+            "<p>A valid signature plan is required before "
+            "previewing output.</p>"
+        )
+        self.preview_image_label.adjustSize()
+
+        self.preview_position_label.clear()
+
+        self.preview_previous_button.setEnabled(False)
+        self.preview_next_button.setEnabled(False)
 
     def _show_signature_preview(
         self,
