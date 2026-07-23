@@ -2,7 +2,8 @@
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QUrl, Qt
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QFileDialog,
     QGroupBox,
@@ -23,6 +24,8 @@ from PySide6.QtWidgets import (
 from app.core import (
     BookletImposer,
     BookletImpositionError,
+    LogicalPageStreamBuilder,
+    LogicalPageStreamError,
     SignaturePlanError,
     SignaturePlanner,
 )
@@ -33,7 +36,12 @@ from app.models import (
     ImposedSignature,
     InputDocument,
 )
-from app.services import PdfDocumentError, PdfDocumentService
+from app.services import (
+    PdfDocumentError,
+    PdfDocumentService,
+    SignaturePdfExporter,
+    SignaturePdfExportError,
+)
 from app.version import APP_DESCRIPTION, APP_NAME, APP_VERSION
 
 
@@ -45,6 +53,7 @@ class MainWindow(QMainWindow):
 
         self.project = project
         self.current_imposition: BookImposition | None = None
+        self.last_export_directory: Path | None = None
 
         self.setWindowTitle(APP_NAME)
         self.setMinimumSize(1250, 780)
@@ -107,6 +116,7 @@ class MainWindow(QMainWindow):
 
         input_group = self._create_input_group()
         signature_group = self._create_signature_group()
+        export_group = self._create_export_group()
 
         self.summary_label = QLabel()
         self.summary_label.setWordWrap(True)
@@ -117,6 +127,7 @@ class MainWindow(QMainWindow):
         layout.addSpacing(8)
         layout.addWidget(input_group)
         layout.addWidget(signature_group)
+        layout.addWidget(export_group)
         layout.addWidget(self.summary_label)
         layout.addStretch()
 
@@ -197,6 +208,46 @@ class MainWindow(QMainWindow):
         layout.addWidget(help_label)
         layout.addWidget(self.signature_sequence_edit)
         layout.addWidget(separator_help)
+
+        return group
+
+    def _create_export_group(self) -> QGroupBox:
+        group = QGroupBox("PDF Export")
+        layout = QVBoxLayout(group)
+        layout.setSpacing(8)
+
+        help_label = QLabel(
+            "Generate one imposed PDF per signature. The files are ready "
+            "for duplex printing at 100% scale."
+        )
+        help_label.setWordWrap(True)
+
+        self.output_directory_label = QLabel()
+        self.output_directory_label.setWordWrap(True)
+        self.output_directory_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+
+        button_row = QHBoxLayout()
+        button_row.setSpacing(8)
+
+        self.choose_output_button = QPushButton("Choose Folder")
+        self.choose_output_button.clicked.connect(self._choose_output_directory)
+
+        self.export_button = QPushButton("Export Signatures")
+        self.export_button.clicked.connect(self._export_signatures)
+
+        button_row.addWidget(self.choose_output_button)
+        button_row.addWidget(self.export_button)
+
+        self.open_output_button = QPushButton("Open Output Folder")
+        self.open_output_button.clicked.connect(self._open_output_directory)
+        self.open_output_button.setEnabled(False)
+
+        layout.addWidget(help_label)
+        layout.addWidget(self.output_directory_label)
+        layout.addLayout(button_row)
+        layout.addWidget(self.open_output_button)
 
         return group
 
@@ -453,7 +504,129 @@ class MainWindow(QMainWindow):
         self._refresh_interface()
         self.input_list.setCurrentRow(selected_index + 1)
 
+    def _choose_output_directory(self) -> None:
+        current_directory = self.project.output_directory
+
+        if not current_directory.exists():
+            current_directory = Path.home()
+
+        selected_directory = QFileDialog.getExistingDirectory(
+            self,
+            "Choose Signature Output Folder",
+            str(current_directory),
+        )
+
+        if not selected_directory:
+            return
+
+        self.project.output_directory = Path(selected_directory)
+        self.last_export_directory = None
+
+        self._refresh_export_controls()
+        self._refresh_summary()
+
+        self.statusBar().showMessage(
+            f"Output folder set to {selected_directory}",
+            4000,
+        )
+
+    def _export_signatures(self) -> None:
+        sequence_value = self.signature_sequence_edit.text()
+
+        try:
+            sheet_counts = SignaturePlanner.parse_signature_sequence(sequence_value)
+
+            self.project.signature_sheet_counts = list(sheet_counts)
+
+            plan = SignaturePlanner.create(
+                self.project,
+                sheet_counts=sheet_counts,
+            )
+
+            stream = LogicalPageStreamBuilder.create(self.project)
+            imposition = BookletImposer.create(plan)
+
+            result = SignaturePdfExporter.export(
+                self.project,
+                stream,
+                imposition,
+                output_directory=self.project.output_directory,
+            )
+        except (
+            SignaturePlanError,
+            LogicalPageStreamError,
+            BookletImpositionError,
+            SignaturePdfExportError,
+        ) as exc:
+            QMessageBox.critical(
+                self,
+                "Export Failed",
+                str(exc),
+            )
+            self.statusBar().showMessage("Export failed", 5000)
+            return
+        except OSError as exc:
+            QMessageBox.critical(
+                self,
+                "Export Failed",
+                f"The output folder could not be used:\n\n{exc}",
+            )
+            self.statusBar().showMessage("Export failed", 5000)
+            return
+
+        self.current_imposition = imposition
+        self.last_export_directory = result.output_directory
+
+        self._refresh_export_controls()
+
+        signature_word = "signature" if result.signature_count == 1 else "signatures"
+        sheet_word = "sheet" if result.total_sheet_count == 1 else "sheets"
+
+        QMessageBox.information(
+            self,
+            "Export Complete",
+            (
+                f"Exported {result.signature_count} {signature_word} "
+                f"covering {result.total_sheet_count} {sheet_word}.\n\n"
+                f"Output folder:\n{result.output_directory}\n\n"
+                "Print the generated PDFs double-sided at 100% scale, "
+                "flipping on the short edge. Do not enable the printer's "
+                "booklet mode."
+            ),
+        )
+
+        self.statusBar().showMessage(
+            (f"Exported {result.signature_count} {signature_word} to {result.output_directory}"),
+            8000,
+        )
+
+    def _open_output_directory(self) -> None:
+        directory = self.last_export_directory
+
+        if directory is None:
+            directory = self.project.output_directory
+
+        if not directory.exists():
+            QMessageBox.warning(
+                self,
+                "Output Folder Not Found",
+                (f"The output folder does not currently exist:\n\n{directory}"),
+            )
+            self._refresh_export_controls()
+            return
+
+        opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory.resolve())))
+
+        if not opened:
+            QMessageBox.warning(
+                self,
+                "Could Not Open Folder",
+                (f"The output folder could not be opened automatically:\n\n{directory}"),
+            )
+
     def _signature_sequence_changed(self, value: str) -> None:
+        self.last_export_directory = None
+
         try:
             sheet_counts = SignaturePlanner.parse_signature_sequence(value)
         except SignaturePlanError:
@@ -477,9 +650,12 @@ class MainWindow(QMainWindow):
         self._show_signature_preview(signature)
 
     def _refresh_interface(self) -> None:
+        self.last_export_directory = None
+
         self._refresh_input_list()
         self._refresh_summary()
         self._refresh_signature_plan()
+        self._refresh_export_controls()
         self._update_input_button_states()
 
     def _refresh_input_list(self) -> None:
@@ -525,12 +701,14 @@ class MainWindow(QMainWindow):
 
         self.current_imposition = None
         self._clear_sheet_preview()
+        self._refresh_export_controls()
 
         sequence_value = self.signature_sequence_edit.text()
 
         if not self.project.documents:
             self._show_neutral_validation("No PDFs selected. Add at least one PDF to begin.")
             self.plan_summary_label.clear()
+            self._refresh_export_controls()
             return
 
         try:
@@ -538,6 +716,7 @@ class MainWindow(QMainWindow):
         except SignaturePlanError as exc:
             self._show_warning_validation(str(exc))
             self.plan_summary_label.setText(f"Current input: {self.project.total_page_count} pages")
+            self._refresh_export_controls()
             return
 
         self.project.signature_sheet_counts = list(sheet_counts)
@@ -554,6 +733,7 @@ class MainWindow(QMainWindow):
                 f"Plan: {sum(sheet_counts)} sheets / "
                 f"{sum(sheet_counts) * 4} pages"
             )
+            self._refresh_export_controls()
             return
 
         try:
@@ -565,6 +745,7 @@ class MainWindow(QMainWindow):
             self.plan_summary_label.setText(
                 f"Input: {plan.total_page_count} pages · {plan.total_sheet_count} sheets"
             )
+            self._refresh_export_controls()
             return
 
         self.current_imposition = imposition
@@ -606,6 +787,23 @@ class MainWindow(QMainWindow):
             )
 
             self.signature_list.setCurrentRow(selected_signature_index)
+
+        self._refresh_export_controls()
+
+    def _refresh_export_controls(self) -> None:
+        output_directory = self.project.output_directory
+
+        self.output_directory_label.setText(f"<b>Output folder</b><br>{output_directory}")
+
+        self.export_button.setEnabled(self.current_imposition is not None)
+
+        directory_to_open = (
+            self.last_export_directory
+            if self.last_export_directory is not None
+            else output_directory
+        )
+
+        self.open_output_button.setEnabled(directory_to_open.exists())
 
     def _show_signature_preview(
         self,
