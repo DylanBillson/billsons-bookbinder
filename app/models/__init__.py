@@ -18,12 +18,19 @@ from app.models.imposition import (
     ImposedSignature,
     SheetSide,
 )
+from app.models.logical_page import (
+    BlankLogicalPage,
+    LogicalPage,
+    LogicalPageStream,
+    SourceLogicalPage,
+)
 from app.models.signature_plan import (
     PlannedSignature,
     SignaturePlan,
 )
 
 __all__ = [
+    "BlankLogicalPage",
     "BlankPages",
     "BookImposition",
     "BookInput",
@@ -33,6 +40,8 @@ __all__ = [
     "ImposedSide",
     "ImposedSignature",
     "InputDocument",
+    "LogicalPage",
+    "LogicalPageStream",
     "MarginSettings",
     "PageFittingMode",
     "PaperSize",
@@ -40,4 +49,5 @@ __all__ = [
     "PrintSettings",
     "SheetSide",
     "SignaturePlan",
+    "SourceLogicalPage",
 ]
