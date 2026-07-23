@@ -1,4 +1,4 @@
-"""Tests for signature planning."""
+"""Tests for explicit signature parsing and validation."""
 
 from itertools import pairwise
 from pathlib import Path
@@ -7,168 +7,168 @@ import pytest
 
 from app.core import SignaturePlanError, SignaturePlanner
 from app.models import (
+    BlankPages,
     BookProject,
-    IncompleteSignatureMode,
     InputDocument,
-    SignatureKind,
-    SmallerSignaturePosition,
 )
 
 
 def make_project(
     page_count: int,
     *,
-    sheets_per_signature: int = 4,
+    blank_pages: int = 0,
 ) -> BookProject:
-    """Create a project with one synthetic input document."""
+    """Create a project with one synthetic PDF."""
 
-    project = BookProject(
-        documents=[
-            InputDocument(
-                path=Path("book.pdf"),
-                page_count=page_count,
-            )
-        ]
-    )
-    project.print_settings.sheets_per_signature = sheets_per_signature
-    return project
-
-
-def test_requirements_reports_pages_needed_for_complete_sheet() -> None:
-    project = make_project(101)
-
-    requirements = SignaturePlanner.requirements(project)
-
-    assert requirements.pages_to_next_sheet == 3
-
-
-def test_requirements_reports_pages_needed_for_full_signature() -> None:
-    project = make_project(100)
-
-    requirements = SignaturePlanner.requirements(project)
-
-    assert requirements.pages_to_next_full_signature == 12
-
-
-def test_add_blanks_mode_creates_only_full_signatures() -> None:
-    project = make_project(112)
-    project.signature_settings.handling = IncompleteSignatureMode.ADD_BLANKS
-
-    plan = SignaturePlanner.create(project)
-
-    assert plan.signature_count == 7
-    assert plan.full_signature_count == 7
-    assert plan.smaller_signature is None
-    assert plan.total_sheet_count == 28
-    assert all(signature.kind is SignatureKind.FULL for signature in plan.signatures)
-
-
-def test_add_blanks_mode_rejects_incomplete_full_signature() -> None:
-    project = make_project(100)
-    project.signature_settings.handling = IncompleteSignatureMode.ADD_BLANKS
-
-    with pytest.raises(SignaturePlanError) as error:
-        SignaturePlanner.create(project)
-
-    assert error.value.additional_blank_pages_required == 12
-
-
-def test_add_blanks_mode_accepts_blanks_split_between_start_and_end() -> None:
-    project = make_project(100)
-    project.signature_settings.handling = IncompleteSignatureMode.ADD_BLANKS
-    project.signature_settings.blank_pages_start = 4
-    project.signature_settings.blank_pages_end = 8
-
-    plan = SignaturePlanner.create(project)
-
-    assert plan.total_page_count == 112
-    assert plan.blank_pages_start == 4
-    assert plan.blank_pages_end == 8
-    assert plan.signature_count == 7
-
-
-def test_user_can_add_more_than_minimum_when_total_remains_valid() -> None:
-    project = make_project(100)
-    project.signature_settings.handling = IncompleteSignatureMode.ADD_BLANKS
-    project.signature_settings.blank_pages_start = 8
-    project.signature_settings.blank_pages_end = 20
-
-    plan = SignaturePlanner.create(project)
-
-    assert plan.total_page_count == 128
-    assert plan.signature_count == 8
-
-
-def test_smaller_signature_mode_creates_smaller_signature_at_end() -> None:
-    project = make_project(100)
-    project.signature_settings.handling = IncompleteSignatureMode.SMALLER_SIGNATURE
-    project.signature_settings.smaller_signature_position = SmallerSignaturePosition.END
-
-    plan = SignaturePlanner.create(project)
-
-    assert plan.full_signature_count == 6
-    assert plan.signature_count == 7
-    assert plan.smaller_signature is not None
-    assert plan.smaller_signature.sheet_count == 1
-    assert plan.smaller_signature.page_count == 4
-    assert plan.signatures[-1].is_smaller
-
-
-def test_smaller_signature_can_be_placed_at_beginning() -> None:
-    project = make_project(100)
-    project.signature_settings.handling = IncompleteSignatureMode.SMALLER_SIGNATURE
-    project.signature_settings.smaller_signature_position = SmallerSignaturePosition.BEGINNING
-
-    plan = SignaturePlanner.create(project)
-
-    assert plan.signatures[0].is_smaller
-    assert plan.signatures[0].page_count == 4
-    assert plan.signatures[1].start_page_index == 4
-
-
-def test_smaller_signature_can_be_placed_in_middle() -> None:
-    project = make_project(100)
-    project.signature_settings.handling = IncompleteSignatureMode.SMALLER_SIGNATURE
-    project.signature_settings.smaller_signature_position = SmallerSignaturePosition.MIDDLE
-
-    plan = SignaturePlanner.create(project)
-
-    assert [signature.page_count for signature in plan.signatures] == [
-        16,
-        16,
-        16,
-        4,
-        16,
-        16,
-        16,
+    inputs: list[InputDocument | BlankPages] = [
+        InputDocument(
+            path=Path("book.pdf"),
+            page_count=page_count,
+        )
     ]
 
+    if blank_pages:
+        inputs.append(BlankPages(quantity=blank_pages))
 
-def test_smaller_signature_mode_still_requires_complete_sheets() -> None:
-    project = make_project(102)
-    project.signature_settings.handling = IncompleteSignatureMode.SMALLER_SIGNATURE
+    return BookProject(inputs=inputs)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("4-4-4-8-4", (4, 4, 4, 8, 4)),
+        ("4, 4, 4, 8, 4", (4, 4, 4, 8, 4)),
+        ("4 4 4 8 4", (4, 4, 4, 8, 4)),
+        ("4 - 4, 8 4", (4, 4, 8, 4)),
+    ],
+)
+def test_signature_sequence_accepts_supported_separators(
+    value: str,
+    expected: tuple[int, ...],
+) -> None:
+    assert SignaturePlanner.parse_signature_sequence(value) == expected
+
+
+def test_signature_sequence_rejects_empty_value() -> None:
+    with pytest.raises(
+        SignaturePlanError,
+        match="at least one",
+    ):
+        SignaturePlanner.parse_signature_sequence("")
+
+
+def test_signature_sequence_rejects_invalid_characters() -> None:
+    with pytest.raises(
+        SignaturePlanError,
+        match="whole numbers",
+    ):
+        SignaturePlanner.parse_signature_sequence("4/4/4")
+
+
+def test_signature_sequence_rejects_zero_sheet_signature() -> None:
+    with pytest.raises(
+        SignaturePlanError,
+        match="at least one sheet",
+    ):
+        SignaturePlanner.parse_signature_sequence("4-0-4")
+
+
+def test_signature_sequence_has_standard_format() -> None:
+    assert SignaturePlanner.format_signature_sequence((4, 4, 8, 4)) == "4-4-8-4"
+
+
+def test_project_requires_at_least_one_pdf() -> None:
+    project = BookProject(
+        inputs=[BlankPages(quantity=4)],
+        signature_sheet_counts=[1],
+    )
+
+    with pytest.raises(
+        SignaturePlanError,
+        match="at least one PDF",
+    ):
+        SignaturePlanner.create(project)
+
+
+def test_input_page_count_must_be_divisible_by_four() -> None:
+    project = make_project(101)
+    project.signature_sheet_counts = [26]
 
     with pytest.raises(SignaturePlanError) as error:
         SignaturePlanner.create(project)
 
-    assert error.value.additional_blank_pages_required == 2
+    assert error.value.blank_pages_required == 3
+    assert "Add 3 blank pages" in str(error.value)
 
 
-def test_smaller_mode_has_no_smaller_signature_when_division_is_exact() -> None:
-    project = make_project(96)
-    project.signature_settings.handling = IncompleteSignatureMode.SMALLER_SIGNATURE
+def test_inserted_blanks_can_make_input_divisible_by_four() -> None:
+    project = make_project(101, blank_pages=3)
+    project.signature_sheet_counts = [26]
 
     plan = SignaturePlanner.create(project)
 
-    assert plan.signature_count == 6
-    assert plan.full_signature_count == 6
-    assert plan.smaller_signature is None
+    assert plan.total_page_count == 104
+    assert plan.blank_page_count == 3
+
+
+def test_signature_definition_is_required() -> None:
+    project = make_project(100)
+
+    with pytest.raises(
+        SignaturePlanError,
+        match="at least one signature",
+    ):
+        SignaturePlanner.create(project)
+
+
+def test_plan_rejects_insufficient_signature_capacity() -> None:
+    project = make_project(128)
+    project.signature_sheet_counts = [4, 4, 4, 4, 4, 4, 4]
+
+    with pytest.raises(SignaturePlanError) as error:
+        SignaturePlanner.create(project)
+
+    assert error.value.missing_pages == 16
+    assert error.value.missing_sheets == 4
+    assert "4 additional sheets" in str(error.value)
+
+
+def test_plan_rejects_excess_signature_capacity() -> None:
+    project = make_project(128)
+    project.signature_sheet_counts = [4, 4, 4, 8, 4, 4, 8]
+
+    with pytest.raises(SignaturePlanError) as error:
+        SignaturePlanner.create(project)
+
+    assert error.value.excess_pages == 16
+    assert error.value.excess_sheets == 4
+    assert "4 sheets too many" in str(error.value)
+
+
+def test_valid_explicit_signature_plan_is_created() -> None:
+    project = make_project(128)
+    project.signature_sheet_counts = [4, 4, 4, 8, 4, 4, 4]
+
+    plan = SignaturePlanner.create(project)
+
+    assert plan.signature_count == 7
+    assert plan.total_sheet_count == 32
+    assert plan.total_page_count == 128
+    assert plan.total_signature_page_capacity == 128
+
+
+def test_signature_sizes_are_preserved_exactly() -> None:
+    project = make_project(128)
+    project.signature_sheet_counts = [4, 4, 4, 8, 4, 4, 4]
+
+    plan = SignaturePlanner.create(project)
+
+    assert [signature.sheet_count for signature in plan.signatures] == [4, 4, 4, 8, 4, 4, 4]
 
 
 def test_signature_page_ranges_are_contiguous() -> None:
-    project = make_project(100)
-    project.signature_settings.handling = IncompleteSignatureMode.SMALLER_SIGNATURE
-    project.signature_settings.smaller_signature_position = SmallerSignaturePosition.MIDDLE
+    project = make_project(128)
+    project.signature_sheet_counts = [4, 4, 4, 8, 4, 4, 4]
 
     plan = SignaturePlanner.create(project)
 
@@ -178,22 +178,30 @@ def test_signature_page_ranges_are_contiguous() -> None:
     for previous, current in pairwise(plan.signatures):
         assert current.start_page_index == previous.end_page_index + 1
 
-    assert plan.signatures[-1].end_page_index == 99
+    assert plan.signatures[-1].end_page_index == 127
 
 
-def test_empty_project_cannot_create_plan() -> None:
-    project = BookProject()
+def test_large_signature_has_correct_page_range() -> None:
+    project = make_project(128)
+    project.signature_sheet_counts = [4, 4, 4, 8, 4, 4, 4]
 
-    with pytest.raises(SignaturePlanError, match="At least one"):
-        SignaturePlanner.create(project)
+    plan = SignaturePlanner.create(project)
+    large_signature = plan.signatures[3]
+
+    assert large_signature.number == 4
+    assert large_signature.sheet_count == 8
+    assert large_signature.page_count == 32
+    assert large_signature.start_page_index == 48
+    assert large_signature.end_page_index == 79
 
 
-def test_zero_sheets_per_signature_is_rejected() -> None:
-    project = make_project(100)
-    project.print_settings.sheets_per_signature = 0
+def test_sheet_counts_can_be_passed_directly_to_create() -> None:
+    project = make_project(32)
 
-    with pytest.raises(
-        SignaturePlanError,
-        match="must be at least 1",
-    ):
-        SignaturePlanner.create(project)
+    plan = SignaturePlanner.create(
+        project,
+        sheet_counts=(2, 2, 4),
+    )
+
+    assert plan.signature_count == 3
+    assert plan.total_sheet_count == 8
