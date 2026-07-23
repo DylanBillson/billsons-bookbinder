@@ -4,6 +4,10 @@ from app.services.pdf_document_service import (
     PdfDocumentError,
     PdfDocumentService,
 )
+from app.services.pdf_preview_renderer import (
+    PdfPreviewRenderer,
+    PdfPreviewRenderError,
+)
 from app.services.signature_pdf_exporter import (
     SignaturePdfExporter,
     SignaturePdfExportError,
@@ -14,4 +18,6 @@ __all__ = [
     "PdfDocumentService",
     "SignaturePdfExporter",
     "SignaturePdfExportError",
+    "PdfPreviewRenderer",
+    "PdfPreviewRenderError",
 ]

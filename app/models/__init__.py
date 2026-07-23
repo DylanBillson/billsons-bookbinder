@@ -28,6 +28,11 @@ from app.models.pdf_export import (
     ExportedSignaturePdf,
     PdfExportResult,
 )
+from app.models.pdf_preview import (
+    BookPreview,
+    RenderedPreviewPage,
+    SignaturePreview,
+)
 from app.models.signature_plan import (
     PlannedSignature,
     SignaturePlan,
@@ -56,4 +61,7 @@ __all__ = [
     "SheetSide",
     "SignaturePlan",
     "SourceLogicalPage",
+    "BookPreview",
+    "RenderedPreviewPage",
+    "SignaturePreview",
 ]
