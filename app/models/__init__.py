@@ -24,6 +24,10 @@ from app.models.logical_page import (
     LogicalPageStream,
     SourceLogicalPage,
 )
+from app.models.pdf_export import (
+    ExportedSignaturePdf,
+    PdfExportResult,
+)
 from app.models.signature_plan import (
     PlannedSignature,
     SignaturePlan,
@@ -36,6 +40,7 @@ __all__ = [
     "BookInput",
     "BookProject",
     "DuplexMode",
+    "ExportedSignaturePdf",
     "ImposedSheet",
     "ImposedSide",
     "ImposedSignature",
@@ -45,6 +50,7 @@ __all__ = [
     "MarginSettings",
     "PageFittingMode",
     "PaperSize",
+    "PdfExportResult",
     "PlannedSignature",
     "PrintSettings",
     "SheetSide",

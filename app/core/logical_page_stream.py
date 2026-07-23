@@ -117,29 +117,23 @@ class LogicalPageStreamBuilder:
 
         if stream.page_count != project.total_page_count:
             raise LogicalPageStreamError(
-                
-                    f"The logical page stream contains "
-                    f"{stream.page_count} pages, but the project contains "
-                    f"{project.total_page_count} pages."
-                
+                f"The logical page stream contains "
+                f"{stream.page_count} pages, but the project contains "
+                f"{project.total_page_count} pages."
             )
 
         if stream.source_page_count != project.source_pdf_page_count:
             raise LogicalPageStreamError(
-                
-                    f"The logical page stream contains "
-                    f"{stream.source_page_count} source pages, but the "
-                    f"project contains {project.source_pdf_page_count}."
-                
+                f"The logical page stream contains "
+                f"{stream.source_page_count} source pages, but the "
+                f"project contains {project.source_pdf_page_count}."
             )
 
         if stream.blank_page_count != project.blank_page_count:
             raise LogicalPageStreamError(
-                
-                    f"The logical page stream contains "
-                    f"{stream.blank_page_count} blank pages, but the "
-                    f"project contains {project.blank_page_count}."
-                
+                f"The logical page stream contains "
+                f"{stream.blank_page_count} blank pages, but the "
+                f"project contains {project.blank_page_count}."
             )
 
         expected_indices = tuple(range(project.total_page_count))
