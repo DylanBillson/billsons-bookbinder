@@ -12,6 +12,11 @@ from app.models.book_project import (
     SignatureSettings,
     SmallerSignaturePosition,
 )
+from app.models.signature_plan import (
+    PlannedSignature,
+    SignatureKind,
+    SignaturePlan,
+)
 
 __all__ = [
     "BookProject",
@@ -21,7 +26,10 @@ __all__ = [
     "MarginSettings",
     "PageFittingMode",
     "PaperSize",
+    "PlannedSignature",
     "PrintSettings",
+    "SignatureKind",
+    "SignaturePlan",
     "SignatureSettings",
     "SmallerSignaturePosition",
 ]
