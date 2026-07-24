@@ -67,7 +67,10 @@ class MainWindow(QMainWindow):
         self.project = project
         self.current_imposition: BookImposition | None = None
         self.last_export_directory: Path | None = None
+
         self.separate_duplex_outputs = False
+        self.combine_signatures = self.project.combine_signatures
+
         self.current_preview_pixmap: QPixmap | None = None
         self.current_preview_output_page_index = 0
         self.preview_zoom_percent = 100
@@ -75,7 +78,9 @@ class MainWindow(QMainWindow):
         self.preview_refresh_timer = QTimer(self)
         self.preview_refresh_timer.setSingleShot(True)
         self.preview_refresh_timer.setInterval(180)
-        self.preview_refresh_timer.timeout.connect(self._render_current_pdf_preview)
+        self.preview_refresh_timer.timeout.connect(
+            self._render_current_pdf_preview
+        )
 
         self.setWindowTitle(APP_NAME)
         self.setMinimumSize(1280, 760)
@@ -531,33 +536,22 @@ class MainWindow(QMainWindow):
         self.separate_duplex_checkbox = QCheckBox(
             "Create separate A-side and B-side signature PDFs"
         )
-        self.separate_duplex_checkbox.setChecked(self.separate_duplex_outputs)
-        self.separate_duplex_checkbox.stateChanged.connect(self._duplex_output_changed)
+        self.separate_duplex_checkbox.setChecked(
+            self.separate_duplex_outputs
+        )
+        self.separate_duplex_checkbox.stateChanged.connect(
+            self._duplex_output_changed
+        )
 
         help_label = QLabel(
-            "When enabled, front and back sheet sides will eventually "
-            "be exported separately for printers or workflows that "
-            "cannot use ordinary duplex output."
+            "When enabled, each signature is exported as two PDFs: "
+            "an A-side file containing every sheet front and a B-side "
+            "file containing every sheet back."
         )
         help_label.setWordWrap(True)
 
-        status_label = QLabel(
-            "The interface option is ready. Separate-file export will "
-            "be connected in the next implementation stage."
-        )
-        status_label.setWordWrap(True)
-        status_label.setStyleSheet(
-            "QLabel {"
-            "background: palette(alternate-base);"
-            "border: 1px solid palette(mid);"
-            "border-radius: 4px;"
-            "padding: 8px;"
-            "}"
-        )
-
         layout.addWidget(self.separate_duplex_checkbox)
         layout.addWidget(help_label)
-        layout.addWidget(status_label)
 
         return group
 
@@ -774,8 +768,28 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(group)
         layout.setSpacing(8)
 
-        help_label = QLabel("Generate one imposed PDF per signature.")
+        help_label = QLabel(
+            "Export one PDF per signature, separate A-side and B-side PDFs, "
+            "or combine every signature into one print-ready PDF."
+        )
         help_label.setWordWrap(True)
+
+        self.combine_export_checkbox = QCheckBox(
+            "Combine all signatures into one PDF"
+        )
+        self.combine_export_checkbox.setChecked(
+            self.combine_signatures
+        )
+        self.combine_export_checkbox.stateChanged.connect(
+            self._combine_export_changed
+        )
+
+        combine_help_label = QLabel(
+            "Combined export automatically inserts two-sided separator sheets "
+            "between signatures so each new signature starts correctly during "
+            "duplex printing."
+        )
+        combine_help_label.setWordWrap(True)
 
         self.output_directory_label = QLabel()
         self.output_directory_label.setWordWrap(True)
@@ -783,18 +797,30 @@ class MainWindow(QMainWindow):
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
 
-        self.choose_output_button = QPushButton("Choose Output Folder")
-        self.choose_output_button.clicked.connect(self._choose_output_directory)
+        self.choose_output_button = QPushButton(
+            "Choose Output Folder"
+        )
+        self.choose_output_button.clicked.connect(
+            self._choose_output_directory
+        )
 
         self.export_button = QPushButton("Export Signatures")
         self.export_button.setMinimumHeight(42)
-        self.export_button.clicked.connect(self._export_signatures)
+        self.export_button.clicked.connect(
+            self._export_signatures
+        )
 
-        self.open_output_button = QPushButton("Open Output Folder")
-        self.open_output_button.clicked.connect(self._open_output_directory)
+        self.open_output_button = QPushButton(
+            "Open Output Folder"
+        )
+        self.open_output_button.clicked.connect(
+            self._open_output_directory
+        )
         self.open_output_button.setEnabled(False)
 
         layout.addWidget(help_label)
+        layout.addWidget(self.combine_export_checkbox)
+        layout.addWidget(combine_help_label)
         layout.addWidget(self.output_directory_label)
         layout.addWidget(self.choose_output_button)
         layout.addWidget(self.export_button)
@@ -995,53 +1021,43 @@ class MainWindow(QMainWindow):
         self.input_list.setCurrentRow(selected_index + 1)
 
     def _choose_output_directory(self) -> None:
-        current_directory = self.project.output_directory
+        current_directory = self.project.output_root
 
         if not current_directory.exists():
             current_directory = Path.home()
 
         selected_directory = QFileDialog.getExistingDirectory(
             self,
-            "Choose Signature Output Folder",
+            "Choose Output Folder",
             str(current_directory),
         )
 
         if not selected_directory:
             return
 
-        self.project.output_directory = Path(selected_directory)
+        self.project.output_root = Path(selected_directory)
         self.last_export_directory = None
 
         self._refresh_export_controls()
         self._refresh_summary()
 
         self.statusBar().showMessage(
-            f"Output folder set to {selected_directory}",
+            f"Output folder set to {self.project.output_directory}",
             4000,
         )
 
     def _export_signatures(self) -> None:
         self._apply_print_settings()
 
-        if self.separate_duplex_outputs:
-            QMessageBox.information(
-                self,
-                "Separate Duplex Output",
-                (
-                    "The separate A-side and B-side option is part of "
-                    "the new interface, but separate-file generation "
-                    "has not been connected yet.\n\n"
-                    "The current export will generate ordinary duplex "
-                    "signature PDFs."
-                ),
-            )
-
         sequence_value = self.signature_sequence_edit.text()
 
         try:
-            sheet_counts = SignaturePlanner.parse_signature_sequence(sequence_value)
+            sheet_counts = SignaturePlanner.parse_signature_sequence(
+                sequence_value
+            )
 
             self.project.signature_sheet_counts = list(sheet_counts)
+            self.project.combine_signatures = self.combine_signatures
 
             plan = SignaturePlanner.create(
                 self.project,
@@ -1056,6 +1072,8 @@ class MainWindow(QMainWindow):
                 stream,
                 imposition,
                 output_directory=self.project.output_directory,
+                separate_duplex_outputs=self.separate_duplex_outputs,
+                combine_signatures=self.combine_signatures,
             )
         except (
             SignaturePlanError,
@@ -1085,24 +1103,57 @@ class MainWindow(QMainWindow):
         self._refresh_export_controls()
         self._refresh_pdf_preview_summary()
 
-        signature_word = "signature" if result.signature_count == 1 else "signatures"
-        sheet_word = "sheet" if result.total_sheet_count == 1 else "sheets"
+        signature_word = (
+            "signature"
+            if result.signature_count == 1
+            else "signatures"
+        )
+
+        file_word = "PDF" if result.file_count == 1 else "PDFs"
+
+        sheet_word = (
+            "sheet"
+            if result.total_sheet_count == 1
+            else "sheets"
+        )
+
+        if self.combine_signatures:
+            print_instructions = (
+                "All signatures have been combined into one duplex PDF. "
+                "Two-sided separator sheets have been inserted automatically "
+                "between signatures. Print at 100% scale, flip on the short "
+                "edge, and do not enable the printer's booklet mode."
+            )
+        elif self.separate_duplex_outputs:
+            print_instructions = (
+                "The A files contain every sheet front and the B files "
+                "contain every sheet back. Print both sets at 100% scale "
+                "and do not enable the printer's booklet mode."
+            )
+        else:
+            print_instructions = (
+                "Print the generated PDFs double-sided at 100% scale, "
+                "flipping on the short edge. Do not enable the printer's "
+                "booklet mode."
+            )
 
         QMessageBox.information(
             self,
             "Export Complete",
             (
-                f"Exported {result.signature_count} {signature_word} "
-                f"covering {result.total_sheet_count} {sheet_word}.\n\n"
+                f"Exported {result.signature_count} {signature_word} as "
+                f"{result.file_count} {file_word}, covering "
+                f"{result.total_sheet_count} {sheet_word}.\n\n"
                 f"Output folder:\n{result.output_directory}\n\n"
-                "Print the generated PDFs double-sided at 100% scale, "
-                "flipping on the short edge. Do not enable the printer's "
-                "booklet mode."
+                f"{print_instructions}"
             ),
         )
 
         self.statusBar().showMessage(
-            (f"Exported {result.signature_count} {signature_word} to {result.output_directory}"),
+            (
+                f"Exported {result.file_count} {file_word} "
+                f"to {result.output_directory}"
+            ),
             8000,
         )
 
@@ -1130,10 +1181,47 @@ class MainWindow(QMainWindow):
                 (f"The output folder could not be opened automatically:\n\n{directory}"),
             )
 
-    def _duplex_output_changed(self, state: int) -> None:
-        self.separate_duplex_outputs = state == Qt.CheckState.Checked.value
+    def _combine_export_changed(self, state: int) -> None:
+        self.combine_signatures = (
+            state == Qt.CheckState.Checked.value
+        )
+        self.project.combine_signatures = self.combine_signatures
+
+        self.separate_duplex_checkbox.blockSignals(True)
+
+        if self.combine_signatures:
+            self.separate_duplex_outputs = False
+            self.separate_duplex_checkbox.setChecked(False)
+
+        self.separate_duplex_checkbox.setEnabled(
+            not self.combine_signatures
+        )
+
+        self.separate_duplex_checkbox.blockSignals(False)
+
         self.last_export_directory = None
+
         self._refresh_summary()
+        self._refresh_export_controls()
+        self._refresh_pdf_preview_summary()
+
+    def _duplex_output_changed(self, state: int) -> None:
+        if self.combine_signatures:
+            self.separate_duplex_checkbox.blockSignals(True)
+            self.separate_duplex_checkbox.setChecked(False)
+            self.separate_duplex_checkbox.blockSignals(False)
+
+            self.separate_duplex_outputs = False
+            return
+
+        self.separate_duplex_outputs = (
+            state == Qt.CheckState.Checked.value
+        )
+
+        self.last_export_directory = None
+
+        self._refresh_summary()
+        self._refresh_export_controls()
         self._refresh_pdf_preview_summary()
 
     def _print_settings_changed(self) -> None:
@@ -1223,9 +1311,18 @@ class MainWindow(QMainWindow):
         pdf_count = len(self.project.documents)
         input_count = len(self.project.inputs)
 
-        duplex_description = (
-            "Separate A/B files" if self.separate_duplex_outputs else "Ordinary duplex PDF"
-        )
+        if self.combine_signatures:
+            export_description = (
+                "One combined duplex PDF with automatic separator sheets"
+            )
+        elif self.separate_duplex_outputs:
+            export_description = (
+                "Separate A-side and B-side PDFs for each signature"
+            )
+        else:
+            export_description = (
+                "One ordinary duplex PDF per signature"
+            )
 
         self.summary_label.setText(
             f"<b>Book name</b><br>"
@@ -1242,8 +1339,8 @@ class MainWindow(QMainWindow):
             f"{self.project.signature_count}<br>"
             f"Signature capacity: "
             f"{self.project.signature_page_capacity} pages<br><br>"
-            f"<b>Duplex mode</b><br>"
-            f"{duplex_description}<br><br>"
+            f"<b>Export mode</b><br>"
+            f"{export_description}<br><br>"
             f"<b>Output</b><br>"
             f"{self.project.output_directory}"
         )
@@ -1355,9 +1452,18 @@ class MainWindow(QMainWindow):
     def _refresh_export_controls(self) -> None:
         output_directory = self.project.output_directory
 
-        self.output_directory_label.setText(f"<b>Output folder</b><br>{output_directory}")
+        self.output_directory_label.setText(
+            f"<b>Output folder</b><br>{output_directory}"
+        )
 
-        self.export_button.setEnabled(self.current_imposition is not None)
+        has_valid_plan = self.current_imposition is not None
+
+        self.export_button.setEnabled(has_valid_plan)
+        self.combine_export_checkbox.setEnabled(has_valid_plan)
+
+        self.separate_duplex_checkbox.setEnabled(
+            has_valid_plan and not self.combine_signatures
+        )
 
         directory_to_open = (
             self.last_export_directory
@@ -1365,7 +1471,9 @@ class MainWindow(QMainWindow):
             else output_directory
         )
 
-        self.open_output_button.setEnabled(directory_to_open.exists())
+        self.open_output_button.setEnabled(
+            directory_to_open.exists()
+        )
 
     def _refresh_pdf_preview_summary(self) -> None:
         if self.current_imposition is None:
@@ -1374,9 +1482,23 @@ class MainWindow(QMainWindow):
             )
             return
 
-        paper_size = self._enum_display_name(self.project.print_settings.paper_size)
-        fitting_mode = self._enum_display_name(self.project.print_settings.fitting_mode)
-        duplex_mode = "Separate A/B files" if self.separate_duplex_outputs else "Ordinary duplex"
+        paper_size = self._enum_display_name(
+            self.project.print_settings.paper_size
+        )
+
+        fitting_mode = self._enum_display_name(
+            self.project.print_settings.fitting_mode
+        )
+
+        if self.combine_signatures:
+            export_mode = (
+                "Combined PDF with automatic separator sheets"
+            )
+        elif self.separate_duplex_outputs:
+            export_mode = "Separate A/B files"
+        else:
+            export_mode = "Individual duplex signature PDFs"
+
         margins = self.project.print_settings.margins
 
         self.pdf_preview_summary_label.setText(
@@ -1385,7 +1507,7 @@ class MainWindow(QMainWindow):
             f"{self.current_imposition.total_sheet_count} sheets · "
             f"{paper_size} landscape · "
             f"{fitting_mode} · "
-            f"{duplex_mode}<br>"
+            f"{export_mode}<br>"
             f"Margins: binding {margins.binding_mm:g} mm · "
             f"outer {margins.outer_mm:g} mm · "
             f"top {margins.top_mm:g} mm · "

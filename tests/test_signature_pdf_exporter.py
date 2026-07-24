@@ -75,11 +75,14 @@ def read_page_texts(path: Path) -> list[str]:
         document.close()
 
 
-def test_one_signature_pdf_is_created(tmp_path: Path) -> None:
+def test_one_signature_pdf_is_created(
+    tmp_path: Path,
+) -> None:
     source_path = tmp_path / "book.pdf"
     create_labelled_pdf(source_path, 4)
 
     project = BookProject(
+        name="Secret Garden",
         inputs=[
             InputDocument(
                 path=source_path,
@@ -99,9 +102,16 @@ def test_one_signature_pdf_is_created(tmp_path: Path) -> None:
         output_directory=output_directory,
     )
 
+    expected_path = (
+        output_directory
+        / "1-signature-secret-garden.pdf"
+    )
+
     assert result.signature_count == 1
-    assert result.paths == (output_directory / "signature-001.pdf",)
-    assert result.paths[0].exists()
+    assert result.file_count == 1
+    assert result.paths == (expected_path,)
+    assert result.signatures[0].paths == (expected_path,)
+    assert expected_path.exists()
 
 
 def test_one_sheet_signature_has_two_output_pages(
@@ -217,7 +227,10 @@ def test_four_sheet_signature_uses_duplex_print_order(
         strict=True,
     ):
         for source_page_number in expected_pair:
-            assert f"SOURCE-PAGE-{source_page_number}" in output_text
+            assert (
+                f"SOURCE-PAGE-{source_page_number}"
+                in output_text
+            )
 
 
 def test_multiple_signatures_create_separate_files(
@@ -227,6 +240,7 @@ def test_multiple_signatures_create_separate_files(
     create_labelled_pdf(source_path, 24)
 
     project = BookProject(
+        name="Secret Garden",
         inputs=[
             InputDocument(
                 path=source_path,
@@ -246,12 +260,28 @@ def test_multiple_signatures_create_separate_files(
     )
 
     assert result.signature_count == 2
+    assert result.file_count == 2
     assert result.total_sheet_count == 6
     assert result.total_output_page_count == 12
 
     assert result.paths == (
-        tmp_path / "output" / "signature-001.pdf",
-        tmp_path / "output" / "signature-002.pdf",
+        (
+            tmp_path
+            / "output"
+            / "1-signature-secret-garden.pdf"
+        ),
+        (
+            tmp_path
+            / "output"
+            / "2-signature-secret-garden.pdf"
+        ),
+    )
+
+    assert result.signatures[0].paths == (
+        result.paths[0],
+    )
+    assert result.signatures[1].paths == (
+        result.paths[1],
     )
 
     assert all(path.exists() for path in result.paths)
@@ -282,13 +312,27 @@ def test_second_signature_uses_correct_global_pages(
         output_directory=tmp_path / "output",
     )
 
-    second_signature_texts = read_page_texts(result.paths[1])
+    second_signature_texts = read_page_texts(
+        result.paths[1]
+    )
 
-    assert "SOURCE-PAGE-24" in second_signature_texts[0]
-    assert "SOURCE-PAGE-17" in second_signature_texts[0]
+    assert (
+        "SOURCE-PAGE-24"
+        in second_signature_texts[0]
+    )
+    assert (
+        "SOURCE-PAGE-17"
+        in second_signature_texts[0]
+    )
 
-    assert "SOURCE-PAGE-18" in second_signature_texts[1]
-    assert "SOURCE-PAGE-23" in second_signature_texts[1]
+    assert (
+        "SOURCE-PAGE-18"
+        in second_signature_texts[1]
+    )
+    assert (
+        "SOURCE-PAGE-23"
+        in second_signature_texts[1]
+    )
 
 
 def test_explicit_blank_page_produces_empty_slot(
@@ -355,27 +399,349 @@ def test_37_page_example_outputs_expected_signature_three(
         output_directory=tmp_path / "output",
     )
 
-    signature_three_texts = read_page_texts(result.paths[2])
+    signature_three_texts = read_page_texts(
+        result.paths[2]
+    )
 
     assert len(signature_three_texts) == 4
 
-    # Sheet 1 front: book 40 blank | book 33 = source page 32.
-    assert "SOURCE-PAGE-32" in signature_three_texts[0]
+    # Sheet 1 front: book 40 blank | book 33 = source 32.
+    assert (
+        "SOURCE-PAGE-32"
+        in signature_three_texts[0]
+    )
 
     # Sheet 1 back: book 34 = source 33 | book 39 blank.
-    assert "SOURCE-PAGE-33" in signature_three_texts[1]
+    assert (
+        "SOURCE-PAGE-33"
+        in signature_three_texts[1]
+    )
 
     # Sheet 2 front: book 38 = source 37 | book 35 = source 34.
-    assert "SOURCE-PAGE-37" in signature_three_texts[2]
-    assert "SOURCE-PAGE-34" in signature_three_texts[2]
+    assert (
+        "SOURCE-PAGE-37"
+        in signature_three_texts[2]
+    )
+    assert (
+        "SOURCE-PAGE-34"
+        in signature_three_texts[2]
+    )
 
     # Sheet 2 back: book 36 = source 35 | book 37 = source 36.
-    assert "SOURCE-PAGE-35" in signature_three_texts[3]
-    assert "SOURCE-PAGE-36" in signature_three_texts[3]
+    assert (
+        "SOURCE-PAGE-35"
+        in signature_three_texts[3]
+    )
+    assert (
+        "SOURCE-PAGE-36"
+        in signature_three_texts[3]
+    )
+
+
+def test_separate_duplex_export_creates_a_and_b_files(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "book.pdf"
+    create_labelled_pdf(source_path, 4)
+
+    project = BookProject(
+        name="Secret Garden",
+        inputs=[
+            InputDocument(
+                path=source_path,
+                page_count=4,
+            )
+        ],
+        signature_sheet_counts=[1],
+    )
+
+    stream, imposition = create_export_structures(project)
+    output_directory = tmp_path / "output"
+
+    result = SignaturePdfExporter.export(
+        project,
+        stream,
+        imposition,
+        output_directory=output_directory,
+        separate_duplex_outputs=True,
+    )
+
+    a_path = (
+        output_directory
+        / "1a-signature-secret-garden.pdf"
+    )
+    b_path = (
+        output_directory
+        / "1b-signature-secret-garden.pdf"
+    )
+
+    assert result.signature_count == 1
+    assert result.file_count == 2
+    assert result.total_sheet_count == 1
+    assert result.total_output_page_count == 2
+
+    assert result.paths == (
+        a_path,
+        b_path,
+    )
+    assert result.signatures[0].paths == (
+        a_path,
+        b_path,
+    )
+
+    assert a_path.exists()
+    assert b_path.exists()
+
+
+def test_separate_duplex_files_contain_one_page_per_sheet(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "book.pdf"
+    create_labelled_pdf(source_path, 16)
+
+    project = BookProject(
+        name="Secret Garden",
+        inputs=[
+            InputDocument(
+                path=source_path,
+                page_count=16,
+            )
+        ],
+        signature_sheet_counts=[4],
+    )
+
+    stream, imposition = create_export_structures(project)
+
+    result = SignaturePdfExporter.export(
+        project,
+        stream,
+        imposition,
+        output_directory=tmp_path / "output",
+        separate_duplex_outputs=True,
+    )
+
+    a_document = pymupdf.open(result.paths[0])
+    b_document = pymupdf.open(result.paths[1])
+
+    try:
+        assert a_document.page_count == 4
+        assert b_document.page_count == 4
+    finally:
+        a_document.close()
+        b_document.close()
+
+
+def test_separate_duplex_a_file_contains_all_fronts(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "book.pdf"
+    create_labelled_pdf(source_path, 16)
+
+    project = BookProject(
+        name="Secret Garden",
+        inputs=[
+            InputDocument(
+                path=source_path,
+                page_count=16,
+            )
+        ],
+        signature_sheet_counts=[4],
+    )
+
+    stream, imposition = create_export_structures(project)
+
+    result = SignaturePdfExporter.export(
+        project,
+        stream,
+        imposition,
+        output_directory=tmp_path / "output",
+        separate_duplex_outputs=True,
+    )
+
+    a_page_texts = read_page_texts(result.paths[0])
+
+    expected_front_pairs = [
+        (16, 1),
+        (14, 3),
+        (12, 5),
+        (10, 7),
+    ]
+
+    assert len(a_page_texts) == 4
+
+    for output_text, expected_pair in zip(
+        a_page_texts,
+        expected_front_pairs,
+        strict=True,
+    ):
+        for source_page_number in expected_pair:
+            assert (
+                f"SOURCE-PAGE-{source_page_number}"
+                in output_text
+            )
+
+
+def test_separate_duplex_b_file_contains_all_backs(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "book.pdf"
+    create_labelled_pdf(source_path, 16)
+
+    project = BookProject(
+        name="Secret Garden",
+        inputs=[
+            InputDocument(
+                path=source_path,
+                page_count=16,
+            )
+        ],
+        signature_sheet_counts=[4],
+    )
+
+    stream, imposition = create_export_structures(project)
+
+    result = SignaturePdfExporter.export(
+        project,
+        stream,
+        imposition,
+        output_directory=tmp_path / "output",
+        separate_duplex_outputs=True,
+    )
+
+    b_page_texts = read_page_texts(result.paths[1])
+
+    expected_back_pairs = [
+        (2, 15),
+        (4, 13),
+        (6, 11),
+        (8, 9),
+    ]
+
+    assert len(b_page_texts) == 4
+
+    for output_text, expected_pair in zip(
+        b_page_texts,
+        expected_back_pairs,
+        strict=True,
+    ):
+        for source_page_number in expected_pair:
+            assert (
+                f"SOURCE-PAGE-{source_page_number}"
+                in output_text
+            )
+
+
+def test_separate_duplex_multiple_signatures_create_four_files(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "book.pdf"
+    create_labelled_pdf(source_path, 24)
+
+    project = BookProject(
+        name="Secret Garden",
+        inputs=[
+            InputDocument(
+                path=source_path,
+                page_count=24,
+            )
+        ],
+        signature_sheet_counts=[4, 2],
+    )
+
+    stream, imposition = create_export_structures(project)
+
+    result = SignaturePdfExporter.export(
+        project,
+        stream,
+        imposition,
+        output_directory=tmp_path / "output",
+        separate_duplex_outputs=True,
+    )
+
+    assert result.signature_count == 2
+    assert result.file_count == 4
+    assert result.total_sheet_count == 6
+    assert result.total_output_page_count == 12
+
+    assert result.paths == (
+        (
+            tmp_path
+            / "output"
+            / "1a-signature-secret-garden.pdf"
+        ),
+        (
+            tmp_path
+            / "output"
+            / "1b-signature-secret-garden.pdf"
+        ),
+        (
+            tmp_path
+            / "output"
+            / "2a-signature-secret-garden.pdf"
+        ),
+        (
+            tmp_path
+            / "output"
+            / "2b-signature-secret-garden.pdf"
+        ),
+    )
+
+    assert result.signatures[0].paths == (
+        result.paths[0],
+        result.paths[1],
+    )
+    assert result.signatures[1].paths == (
+        result.paths[2],
+        result.paths[3],
+    )
+
+    assert all(path.exists() for path in result.paths)
+
+
+def test_filename_uses_filesystem_friendly_book_name(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "book.pdf"
+    create_labelled_pdf(source_path, 4)
+
+    project = BookProject(
+        name="The Secret Garden: Illustrated Edition!",
+        inputs=[
+            InputDocument(
+                path=source_path,
+                page_count=4,
+            )
+        ],
+        signature_sheet_counts=[1],
+    )
+
+    stream, imposition = create_export_structures(project)
+
+    result = SignaturePdfExporter.export(
+        project,
+        stream,
+        imposition,
+        output_directory=tmp_path / "output",
+    )
+
+    assert result.paths == (
+        (
+            tmp_path
+            / "output"
+            / (
+                "1-signature-"
+                "the-secret-garden-illustrated-edition.pdf"
+            )
+        ),
+    )
 
 
 @pytest.mark.parametrize(
-    ("paper_size", "expected_width_mm", "expected_height_mm"),
+    (
+        "paper_size",
+        "expected_width_mm",
+        "expected_height_mm",
+    ),
     [
         (PaperSize.A3, 420.0, 297.0),
         (PaperSize.A4, 297.0, 210.0),
@@ -451,7 +817,9 @@ def test_fill_and_crop_mode_generates_output(
         ],
         signature_sheet_counts=[1],
     )
-    project.print_settings.fitting_mode = PageFittingMode.FILL_AND_CROP
+    project.print_settings.fitting_mode = (
+        PageFittingMode.FILL_AND_CROP
+    )
 
     stream, imposition = create_export_structures(project)
 
@@ -557,10 +925,16 @@ def test_mismatched_stream_is_rejected(
         signature_sheet_counts=[2],
     )
 
-    four_page_plan = SignaturePlanner.create(four_page_project)
-    four_page_imposition = BookletImposer.create(four_page_plan)
+    four_page_plan = SignaturePlanner.create(
+        four_page_project
+    )
+    four_page_imposition = BookletImposer.create(
+        four_page_plan
+    )
 
-    eight_page_stream = LogicalPageStreamBuilder.create(eight_page_project)
+    eight_page_stream = LogicalPageStreamBuilder.create(
+        eight_page_project
+    )
 
     with pytest.raises(
         SignaturePdfExportError,

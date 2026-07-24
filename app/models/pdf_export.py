@@ -6,12 +6,12 @@ from pathlib import Path
 
 @dataclass(frozen=True, slots=True)
 class ExportedSignaturePdf:
-    """One generated imposed signature PDF."""
+    """Generated imposed PDF files for one signature."""
 
     signature_number: int
     sheet_count: int
     output_page_count: int
-    path: Path
+    paths: tuple[Path, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,9 +23,15 @@ class PdfExportResult:
 
     @property
     def signature_count(self) -> int:
-        """Return the number of generated signature files."""
+        """Return the number of exported signatures."""
 
         return len(self.signatures)
+
+    @property
+    def file_count(self) -> int:
+        """Return the number of generated PDF files."""
+
+        return sum(len(signature.paths) for signature in self.signatures)
 
     @property
     def total_sheet_count(self) -> int:
@@ -43,4 +49,8 @@ class PdfExportResult:
     def paths(self) -> tuple[Path, ...]:
         """Return every generated PDF path."""
 
-        return tuple(signature.path for signature in self.signatures)
+        return tuple(
+            path
+            for signature in self.signatures
+            for path in signature.paths
+        )

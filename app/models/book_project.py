@@ -81,7 +81,6 @@ class PrintSettings:
     fitting_mode: PageFittingMode = PageFittingMode.FIT
     margins: MarginSettings = field(default_factory=MarginSettings)
     duplex_mode: DuplexMode = DuplexMode.AUTOMATIC
-    rotate_reverse_sides: bool = True
 
 
 @dataclass(slots=True)
@@ -92,7 +91,11 @@ class BookProject:
     inputs: list[BookInput] = field(default_factory=list)
     signature_sheet_counts: list[int] = field(default_factory=list)
     print_settings: PrintSettings = field(default_factory=PrintSettings)
+
     output_root: Path = field(default_factory=lambda: Path("output"))
+
+    combine_signatures: bool = False
+    include_separator_sheets: bool = False
 
     @property
     def documents(self) -> list[InputDocument]:
